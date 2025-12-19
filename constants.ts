@@ -1,3 +1,4 @@
+
 import { Genre, Tone, StoryLength, VoiceName, Language } from './types';
 
 export const LANGUAGES = [
@@ -8,6 +9,16 @@ export const LANGUAGES = [
 export const GENRES = Object.values(Genre);
 export const TONES = Object.values(Tone);
 export const LENGTHS = Object.values(StoryLength);
+
+// Map Enum to UI Labels
+export const VOICE_OPTIONS = [
+  { value: VoiceName.Puck, label: 'Puck (Nam - Trầm ấm)' },
+  { value: VoiceName.Charon, label: 'Charon (Nam - Sâu sắc)' },
+  { value: VoiceName.Kore, label: 'Kore (Nữ - Dịu dàng)' },
+  { value: VoiceName.Fenrir, label: 'Fenrir (Nam - Mạnh mẽ)' },
+  { value: VoiceName.Zephyr, label: 'Zephyr (Nữ - Trong trẻo)' }
+];
+
 export const VOICES = Object.values(VoiceName);
 
 export const SAMPLE_PROMPTS = {
@@ -17,8 +28,9 @@ export const SAMPLE_PROMPTS = {
     "The last library on a sunken island."
   ],
   [Language.VI]: [
-    "Một chú robot phát hiện ra mình yêu thích làm vườn.",
-    "Thám tử tìm ra một màu sắc mới chưa từng tồn tại.",
-    "Thư viện cuối cùng trên một hòn đảo bị chìm."
+    "Một chàng trai xuyên không về thời Âu Lạc.",
+    "Bí ẩn về ngôi làng ma ám ở Đà Lạt.",
+    "Chuyện tình giữa một lập trình viên AI và cô gái bán cà phê.",
+    "Cuộc chiến giữa các vị thần Sơn Tinh Thủy Tinh thời hiện đại."
   ]
 };

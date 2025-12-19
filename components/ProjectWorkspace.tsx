@@ -1,10 +1,13 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Project } from '../types';
-import { generateStoryAudio, generateStoryImage, generateVeoVideo } from '../services/geminiService';
-import { decodeAudio, generateVideoBlob, blobToBase64 } from '../utils/mediaUtils';
-import Button from './Button';
-import { Play, Pause, Video, Save, ArrowLeft, Download, RefreshCw, PenTool, Image as ImageIcon, Music, Trash2, Settings, Upload, Clapperboard, Sparkles } from 'lucide-react';
+import { Project, Genre, Tone, StoryLength, VoiceName, Language } from '../types';
+import { GENRES, TONES, LENGTHS, VOICE_OPTIONS, LANGUAGES } from '../constants';
 import { APP_SETTINGS } from '../settings';
+import { generateStoryAudio, generateStoryImage, generateStoryText, generateVeoVideo } from '../services/geminiService';
+import { decodeAudio, generateVideoBlob, blobToBase64, audioBufferToWav } from '../utils/mediaUtils';
+import { calculateCost, formatCurrency } from '../utils/costUtils';
+import Button from './Button';
+import { Play, Pause, Video, Save, ArrowLeft, Download, RefreshCw, PenTool, Image as ImageIcon, Music, Trash2, Settings, Upload, Clapperboard, Sparkles, Captions, Zap, Cpu, DollarSign } from 'lucide-react';
 
 interface ProjectWorkspaceProps {
   project: Project;
@@ -15,17 +18,29 @@ interface ProjectWorkspaceProps {
 type VideoQuality = '720p' | '1080p';
 
 const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdateProject, onBack }) => {
-  const [activeTab, setActiveTab] = useState<'editor' | 'media'>('editor');
-  
-  // Initialize with current content
+  // --- Local State ---
+  const [config, setConfig] = useState(project.config);
+  const [models, setModels] = useState(project.models);
   const [editedContent, setEditedContent] = useState(project.content);
-  useEffect(() => { setEditedContent(project.content); }, [project.content]);
+  
+  // Sync if project changes externally (e.g. from parent list), ONLY on ID change to preserve local edits
+  useEffect(() => { 
+      setConfig(project.config);
+      setModels(project.models);
+      setEditedContent(project.content);
+  }, [project.id]);
 
-  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [isExportingVideo, setIsExportingVideo] = useState(false);
-  const [isGeneratingVeo, setIsGeneratingVeo] = useState(false);
+  // Loading States
+  const [loadingState, setLoadingState] = useState({
+      story: false,
+      image: false,
+      audio: false,
+      veo: false,
+      video: false
+  });
+
   const [videoQuality, setVideoQuality] = useState<VideoQuality>('720p');
+  const [showSubtitles, setShowSubtitles] = useState(true);
 
   // Audio Playback State
   const [isPlaying, setIsPlaying] = useState(false);
@@ -34,11 +49,9 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const startTimeRef = useRef<number>(0);
   const pausedAtRef = useRef<number>(0);
-
-  // File Input Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load Audio
+  // Load Audio Buffer
   useEffect(() => {
     const loadAudio = async () => {
       if (project.audioData) {
@@ -58,88 +71,171 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
     return () => { if(audioContextRef.current) audioContextRef.current.close(); }
   }, [project.audioData]);
 
-  const handleSaveContent = () => {
-    onUpdateProject({ ...project, content: editedContent, updatedAt: Date.now() });
-    alert('Story draft saved!');
+  // --- Cost Calculation ---
+  const currentCost = calculateCost(
+    project.usage, 
+    models, 
+    project.imageSource, // Pass image source (ai/upload)
+    !!project.animatedVideoData
+  );
+
+  // --- Handlers ---
+
+  const updateConfig = (field: keyof typeof config, value: any) => {
+      const newConfig = { ...config, [field]: value };
+      setConfig(newConfig);
+      onUpdateProject({ ...project, config: newConfig });
+  };
+
+  const updateModel = (field: keyof typeof models, value: any) => {
+      const newModels = { ...models, [field]: value };
+      setModels(newModels);
+      onUpdateProject({ ...project, models: newModels });
+  };
+
+  const handleGenerateStory = async () => {
+    setLoadingState(prev => ({...prev, story: true}));
+    try {
+      const result = await generateStoryText(config, models.storyModel);
+      
+      const updatedUsage = {
+          ...project.usage,
+          story: result.usage,
+          total: (project.usage.total - project.usage.story.totalTokens) + result.usage.totalTokens
+      };
+
+      setEditedContent(result.content);
+      onUpdateProject({ 
+          ...project, 
+          config, 
+          models, 
+          title: result.title,
+          content: result.content, 
+          usage: updatedUsage,
+          status: 'story_generated',
+          updatedAt: Date.now() 
+      });
+    } catch (e: any) {
+      alert(`Lỗi tạo truyện: ${e.message}`);
+    } finally {
+      setLoadingState(prev => ({...prev, story: false}));
+    }
   };
 
   const handleGenerateAudio = async () => {
-    setIsGeneratingAudio(true);
+    if (!editedContent.trim()) {
+        alert("Vui lòng nhập nội dung truyện trước khi tạo Audio!");
+        return;
+    }
+    setLoadingState(prev => ({...prev, audio: true}));
     try {
-      const audioData = await generateStoryAudio(editedContent, project.config.voice, project.config.language);
-      onUpdateProject({ ...project, content: editedContent, audioData, status: 'audio_generated', updatedAt: Date.now() });
+      // Use editedContent to ensure we narrate what is on screen
+      const result = await generateStoryAudio(editedContent, config.voice, config.language, models.audioModel);
+      
+      const updatedUsage = {
+          ...project.usage,
+          audio: result.usage,
+          // Recalculate total including image if it exists
+          total: (project.usage.story.totalTokens) + result.usage.totalTokens + (project.usage.image?.totalTokens || 0)
+      };
+
+      onUpdateProject({ 
+          ...project, 
+          content: editedContent, // Save the text that was used for audio
+          config,
+          models,
+          audioData: result.audioData, 
+          usage: updatedUsage,
+          status: 'audio_generated', 
+          updatedAt: Date.now() 
+      });
     } catch (e: any) {
-      alert(`Audio Generation Error: ${e.message}`);
+      alert(`Lỗi tạo Audio: ${e.message}`);
     } finally {
-      setIsGeneratingAudio(false);
+      setLoadingState(prev => ({...prev, audio: false}));
     }
   };
 
   const handleGenerateImage = async () => {
-    setIsGeneratingImage(true);
+    setLoadingState(prev => ({...prev, image: true}));
     try {
-      const imageUrl = await generateStoryImage(project.title, editedContent);
-      onUpdateProject({ ...project, imageUrl, updatedAt: Date.now() });
-    } catch (e: any) {
-      alert(`Image Generation Error: ${e.message}`);
-    } finally {
-      setIsGeneratingImage(false);
-    }
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        onUpdateProject({ ...project, imageUrl: reader.result as string, updatedAt: Date.now() });
+      const summary = editedContent.substring(0, 300) || config.idea;
+      const { imageData, usage } = await generateStoryImage(project.title, summary, models.imageModel);
+      
+      const updatedUsage = {
+          ...project.usage,
+          image: usage,
+          // Recalculate total
+          total: project.usage.story.totalTokens + project.usage.audio.totalTokens + usage.totalTokens
       };
-      reader.readAsDataURL(file);
+
+      onUpdateProject({ 
+          ...project, 
+          content: editedContent,
+          config,
+          models,
+          imageUrl: imageData,
+          imageSource: 'ai', // Mark as AI generated for cost calc
+          usage: updatedUsage,
+          updatedAt: Date.now() 
+      });
+    } catch (e: any) {
+      alert(`Lỗi tạo Ảnh: ${e.message}`);
+    } finally {
+      setLoadingState(prev => ({...prev, image: false}));
     }
   };
 
   const handleGenerateVeo = async () => {
     if (!project.imageUrl) return;
-
-    // Check for API Key selection for paid features
     const win = window as any;
     if (win.aistudio) {
       const hasKey = await win.aistudio.hasSelectedApiKey();
       if (!hasKey) {
-        try {
-           await win.aistudio.openSelectKey();
-        } catch (e) {
-           console.error("Key selection failed/cancelled", e);
-           return; 
-        }
+        try { await win.aistudio.openSelectKey(); } catch (e) { return; }
       }
     }
-
-    setIsGeneratingVeo(true);
+    setLoadingState(prev => ({...prev, veo: true}));
     try {
-      const veoData = await generateVeoVideo(project.imageUrl);
-      onUpdateProject({ ...project, animatedVideoData: veoData, updatedAt: Date.now() });
+      const veoData = await generateVeoVideo(project.imageUrl, models.videoModel);
+      onUpdateProject({ 
+          ...project, 
+          animatedVideoData: veoData, 
+          updatedAt: Date.now() 
+      });
     } catch (e: any) {
-      alert(`Veo Generation Error: ${e.message}`);
+      alert(`Lỗi tạo Veo Video: ${e.message}`);
     } finally {
-      setIsGeneratingVeo(false);
+      setLoadingState(prev => ({...prev, veo: false}));
     }
+  };
+
+  const handleExportVideo = async () => {
+      if (!audioBuffer || !project.imageUrl) return;
+      setLoadingState(prev => ({...prev, video: true}));
+      try {
+          const cfg = APP_SETTINGS.VIDEO.QUALITY[videoQuality];
+          const blob = await generateVideoBlob(project.imageUrl, audioBuffer, {
+              width: cfg.WIDTH, height: cfg.HEIGHT, bitrate: cfg.BITRATE, fps: APP_SETTINGS.VIDEO.DEFAULT_FPS,
+              subtitles: showSubtitles ? editedContent : undefined 
+          });
+          const base64Video = await blobToBase64(blob);
+          onUpdateProject({ ...project, videoData: base64Video, updatedAt: Date.now() });
+      } catch (e) {
+          alert('Lỗi xuất video');
+      } finally {
+          setLoadingState(prev => ({...prev, video: false}));
+      }
   };
 
   const togglePlayback = async () => {
     if (!audioContextRef.current || !audioBuffer) return;
-
-    // Resume context if suspended (browser policy)
-    if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-    }
+    if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
 
     if (isPlaying) {
-      if (sourceNodeRef.current) {
-        sourceNodeRef.current.stop();
-        sourceNodeRef.current = null;
-        pausedAtRef.current = audioContextRef.current.currentTime - startTimeRef.current;
-      }
+      sourceNodeRef.current?.stop();
+      sourceNodeRef.current = null;
+      pausedAtRef.current = audioContextRef.current.currentTime - startTimeRef.current;
       setIsPlaying(false);
     } else {
       const source = audioContextRef.current.createBufferSource();
@@ -153,185 +249,282 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
     }
   };
 
-  const handleDeleteAsset = (type: 'image' | 'audio' | 'video' | 'veo') => {
-    if(!window.confirm(`Delete this ${type}?`)) return;
-    const updates: Partial<Project> = { updatedAt: Date.now() };
-    if (type === 'image') updates.imageUrl = undefined;
-    if (type === 'audio') updates.audioData = undefined;
-    if (type === 'video') updates.videoData = undefined;
-    if (type === 'veo') updates.animatedVideoData = undefined;
-    onUpdateProject({ ...project, ...updates });
+  const handleDownloadImage = () => {
+    if (!project.imageUrl) return;
+    const a = document.createElement('a');
+    a.href = project.imageUrl;
+    a.download = `image-${project.id}.png`; 
+    a.click();
   };
 
-  const handleExportVideo = async () => {
-      if (!audioBuffer || !project.imageUrl) return;
-      setIsExportingVideo(true);
-      try {
-          const config = APP_SETTINGS.VIDEO.QUALITY[videoQuality];
-          const blob = await generateVideoBlob(project.imageUrl, audioBuffer, {
-              width: config.WIDTH, height: config.HEIGHT, bitrate: config.BITRATE, fps: APP_SETTINGS.VIDEO.DEFAULT_FPS
-          });
-          const base64Video = await blobToBase64(blob);
-          onUpdateProject({ ...project, videoData: base64Video, updatedAt: Date.now() });
-      } catch (e) {
-          alert('Failed to render video');
-      } finally {
-          setIsExportingVideo(false);
-      }
-  }
+  const handleDownloadAudio = () => {
+    if (!audioBuffer) return;
+    const blob = audioBufferToWav(audioBuffer);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audio-${project.id}.wav`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const hasVeoModels = APP_SETTINGS.AVAILABLE_MODELS.VEO.length > 0;
 
   return (
-    <div className="w-full max-w-6xl mx-auto space-y-6 animate-in fade-in zoom-in duration-300">
-      <div className="flex flex-col md:flex-row md:items-center justify-between bg-slate-800/80 backdrop-blur p-4 rounded-xl border border-slate-700 gap-4">
-        <div className="flex items-center overflow-hidden">
-          <button onClick={onBack} className="mr-4 p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 flex-shrink-0">
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div className="min-w-0">
-            <h2 className="text-xl font-bold text-white font-serif truncate">{project.title}</h2>
-            <div className="flex items-center text-xs text-slate-400 space-x-3">
-               <span>{project.config.length}</span>
-               <span className="w-1 h-1 bg-slate-600 rounded-full"></span>
-               <span>{project.config.language}</span>
-            </div>
+    <div className="w-full h-full flex flex-col bg-slate-950 animate-in fade-in zoom-in duration-300">
+      
+      {/* Top Bar */}
+      <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
+          <div className="flex items-center space-x-3">
+              <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full transition-colors"><ArrowLeft className="w-5 h-5 text-slate-400"/></button>
+              <h1 className="text-xl font-serif font-bold text-white truncate max-w-md">{project.title || "Dự án mới"}</h1>
           </div>
-        </div>
-        <div className="flex space-x-2 w-full md:w-auto">
-            <button onClick={() => setActiveTab('editor')} className={`flex-1 md:flex-none justify-center px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center ${activeTab === 'editor' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
-                <PenTool className="w-4 h-4 mr-2" /> <span className="hidden sm:inline">Story</span> Editor
-            </button>
-            <button onClick={() => setActiveTab('media')} className={`flex-1 md:flex-none justify-center px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center ${activeTab === 'media' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}>
-                <Video className="w-4 h-4 mr-2" /> Media <span className="hidden sm:inline">Studio</span>
-            </button>
-        </div>
+          <div className="flex items-center space-x-4">
+              {/* Token Stats Summary */}
+              <div className="hidden md:flex items-center space-x-3 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                  <DollarSign className="w-4 h-4 text-green-400" />
+                  <div className="text-xs text-slate-400">
+                      <span className="block text-slate-500">Chi phí ước tính</span>
+                      <span className="font-mono text-white font-bold">{formatCurrency(currentCost)}</span>
+                  </div>
+              </div>
+          </div>
       </div>
 
-      {activeTab === 'editor' && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-2xl p-4 md:p-6 shadow-xl">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
-                <p className="text-slate-400 text-sm">Edit text before generating audio.</p>
-                <Button variant="secondary" onClick={handleSaveContent} className="w-full sm:w-auto py-2 h-10 text-sm">
-                    <Save className="w-4 h-4 mr-2" /> Save Draft
-                </Button>
-            </div>
-            <textarea value={editedContent} onChange={(e) => setEditedContent(e.target.value)} className="w-full h-[50vh] md:h-[60vh] bg-slate-900 border border-slate-700 rounded-xl p-4 md:p-6 text-base md:text-lg leading-relaxed text-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none font-serif" />
-        </div>
-      )}
+      {/* Main Grid Layout */}
+      <div className="flex-grow grid grid-cols-1 md:grid-cols-12 gap-0 min-h-0">
+          
+          {/* LEFT: Configuration Panel */}
+          <div className="md:col-span-3 border-r border-slate-800 bg-slate-900/30 overflow-y-auto custom-scrollbar p-4 space-y-6">
+              
+              {/* Story Settings */}
+              <section className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center"><PenTool className="w-4 h-4 mr-2"/> Cấu Hình Truyện</h3>
+                  
+                  <div className="space-y-3">
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Ngôn Ngữ</label>
+                          <select value={config.language} onChange={(e) => updateConfig('language', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                              {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Thể Loại</label>
+                          <select value={config.genre} onChange={(e) => updateConfig('genre', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                              {GENRES.map(g => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Tông Giọng / Cảm Xúc</label>
+                          <select value={config.tone} onChange={(e) => updateConfig('tone', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                              {TONES.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Độ Dài</label>
+                          <select value={config.length} onChange={(e) => updateConfig('length', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                              {LENGTHS.map(l => <option key={l} value={l}>{l}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Ý Tưởng / Prompt</label>
+                          <textarea 
+                              value={config.idea} 
+                              onChange={(e) => updateConfig('idea', e.target.value)}
+                              className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white h-24 resize-none"
+                              placeholder="Nhập ý tưởng câu chuyện..."
+                          />
+                      </div>
+                  </div>
+              </section>
 
-      {activeTab === 'media' && (
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 md:gap-8">
-            <div className="md:col-span-5 space-y-6">
-                {/* Image Section with Upload and Veo */}
-                <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 md:p-6 relative">
-                    <div className="flex justify-between items-center mb-4">
-                         <h3 className="text-lg font-bold text-white flex items-center"><ImageIcon className="w-5 h-5 mr-2 text-purple-400"/> Cover Art</h3>
-                         <div className="flex space-x-2">
-                             <input type="file" ref={fileInputRef} onChange={handleImageUpload} accept="image/*" className="hidden" />
-                             <button onClick={() => fileInputRef.current?.click()} className="text-slate-500 hover:text-indigo-400 transition-colors" title="Upload Image">
-                                 <Upload className="w-4 h-4" />
-                             </button>
-                             {project.imageUrl && (
-                                 <button onClick={() => handleDeleteAsset('image')} className="text-slate-500 hover:text-red-500 transition-colors" title="Delete Image">
-                                     <Trash2 className="w-4 h-4" />
-                                 </button>
-                             )}
-                         </div>
-                    </div>
-                    
-                    <div className="aspect-video bg-slate-900 rounded-xl overflow-hidden mb-4 border border-slate-700 relative group">
-                        {project.imageUrl ? (
-                            <img src={project.imageUrl} alt="Cover" className="w-full h-full object-cover" />
-                        ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-600">No Image Generated</div>
-                        )}
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-2">
-                        <Button onClick={handleGenerateImage} isLoading={isGeneratingImage} variant="secondary" className="text-sm">
-                            <RefreshCw className="w-4 h-4 mr-2" /> {project.imageUrl ? 'Regen' : 'Generate'}
-                        </Button>
-                        <Button onClick={handleGenerateVeo} isLoading={isGeneratingVeo} disabled={!project.imageUrl} variant="primary" className="text-sm bg-purple-600 hover:bg-purple-700">
-                             <Sparkles className="w-4 h-4 mr-2" /> Animate
-                        </Button>
-                    </div>
-                </div>
+              <hr className="border-slate-800" />
 
-                 {/* Veo Result Section (Only shows if exists) */}
-                 {project.animatedVideoData && (
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 md:p-6">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-lg font-bold text-white flex items-center"><Clapperboard className="w-5 h-5 mr-2 text-pink-500"/> Veo Animation</h3>
-                            <button onClick={() => handleDeleteAsset('veo')} className="text-slate-500 hover:text-red-500" title="Delete Veo Video"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                        <video src={project.animatedVideoData} controls autoPlay loop className="w-full rounded-lg border border-slate-700 shadow-lg" />
-                    </div>
-                 )}
+              {/* Model Selection */}
+              <section className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center"><Cpu className="w-4 h-4 mr-2"/> Chọn AI Model</h3>
+                  
+                  <div className="space-y-3">
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Model Viết Truyện</label>
+                          <select value={models.storyModel} onChange={(e) => updateModel('storyModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                              {APP_SETTINGS.AVAILABLE_MODELS.STORY.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Model Tạo Ảnh</label>
+                          <select value={models.imageModel} onChange={(e) => updateModel('imageModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                              {APP_SETTINGS.AVAILABLE_MODELS.IMAGE.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs text-slate-500 block mb-1">Model Giọng Đọc (TTS)</label>
+                          <select value={models.audioModel} onChange={(e) => updateModel('audioModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                              {APP_SETTINGS.AVAILABLE_MODELS.AUDIO.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                          </select>
+                      </div>
+                      {hasVeoModels && (
+                          <div>
+                              <label className="text-xs text-slate-500 block mb-1">Model Video (Veo)</label>
+                              <select value={models.videoModel} onChange={(e) => updateModel('videoModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                                  {APP_SETTINGS.AVAILABLE_MODELS.VEO.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                              </select>
+                          </div>
+                      )}
+                  </div>
+              </section>
 
-                 {/* Audio Section */}
-                 <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 md:p-6">
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-bold text-white flex items-center"><Music className="w-5 h-5 mr-2 text-pink-400"/> Narration</h3>
-                         {project.audioData && (
-                             <button onClick={() => handleDeleteAsset('audio')} className="text-slate-500 hover:text-red-500" title="Delete Audio"><Trash2 className="w-4 h-4" /></button>
-                         )}
-                    </div>
-                    <div className="space-y-4">
-                        <p className="text-sm text-slate-400">Voice: <span className="text-indigo-400 font-medium">{project.config.voice}</span></p>
-                        <Button onClick={handleGenerateAudio} isLoading={isGeneratingAudio} variant="secondary" className="w-full">
-                            <RefreshCw className="w-4 h-4 mr-2" /> {project.audioData ? 'Regenerate' : 'Generate'}
-                        </Button>
-                        {project.audioData && (
-                             <Button onClick={togglePlayback} disabled={!audioBuffer} variant="primary" className="w-full bg-indigo-600">
-                                {isPlaying ? <><Pause className="w-4 h-4 mr-2"/> Pause</> : <><Play className="w-4 h-4 mr-2"/> Play</>}
-                             </Button>
-                        )}
-                    </div>
-                 </div>
-            </div>
+              <div className="pt-4">
+                   <div className="bg-slate-900 rounded p-3 text-xs space-y-2 border border-slate-800">
+                      <p className="font-bold text-slate-400">Token Đã Dùng:</p>
+                      <div className="flex justify-between"><span>Truyện:</span> <span className="text-indigo-400">{project.usage.story.totalTokens}</span></div>
+                      <div className="flex justify-between"><span>Audio:</span> <span className="text-indigo-400">{project.usage.audio.totalTokens}</span></div>
+                      <div className="flex justify-between"><span>Hình Ảnh:</span> <span className="text-purple-400">{project.usage.image?.totalTokens || 0}</span></div>
+                      <hr className="border-slate-800 my-2"/>
+                      <div className="flex justify-between font-bold"><span>Tổng:</span> <span className="text-green-400">{project.usage.total}</span></div>
+                   </div>
+              </div>
+          </div>
 
-            {/* Right Column: Final Export */}
-            <div className="md:col-span-7 bg-slate-800/50 border border-slate-700 rounded-2xl p-4 md:p-6 flex flex-col h-full">
-                <div className="flex justify-between items-start mb-6">
-                    <div>
-                        <h3 className="text-lg font-bold text-white flex items-center"><Video className="w-5 h-5 mr-2 text-green-400"/> Final Export</h3>
-                        <p className="text-slate-400 text-sm mt-1">Combine image & audio into a 9:16 video.</p>
-                    </div>
-                    {project.videoData && <button onClick={() => handleDeleteAsset('video')} className="text-slate-500 hover:text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>}
-                </div>
+          {/* MIDDLE: Content Editor */}
+          <div className="md:col-span-5 flex flex-col border-r border-slate-800 bg-slate-900/10">
+              <div className="flex items-center justify-between p-3 border-b border-slate-800 bg-slate-900/30">
+                  <h3 className="text-sm font-bold text-slate-300">Kịch Bản / Nội Dung</h3>
+                  <div className="flex space-x-2">
+                      <Button variant="secondary" onClick={() => onUpdateProject({...project, content: editedContent, config, models})} className="h-8 px-3 text-xs">
+                          <Save className="w-3 h-3 mr-1"/> Lưu Nháp
+                      </Button>
+                      <Button onClick={handleGenerateStory} isLoading={loadingState.story} className="h-8 px-3 text-xs bg-indigo-600 hover:bg-indigo-700">
+                          <Sparkles className="w-3 h-3 mr-1"/> Viết Truyện
+                      </Button>
+                  </div>
+              </div>
+              <textarea 
+                  value={editedContent} 
+                  onChange={(e) => setEditedContent(e.target.value)} 
+                  className="flex-grow w-full bg-transparent p-6 text-slate-200 text-lg leading-relaxed focus:outline-none resize-none font-serif"
+                  placeholder="Bạn có thể tự nhập truyện vào đây hoặc để AI viết..."
+              />
+          </div>
 
-                <div className="flex-grow flex items-center justify-center bg-slate-900/50 rounded-xl border border-slate-700/50 p-4 mb-6 min-h-[300px] md:min-h-[400px]">
-                    {project.videoData ? (
-                        <video src={project.videoData} controls className="max-h-[50vh] md:max-h-[500px] w-auto h-auto rounded-lg shadow-2xl border border-slate-700" />
-                    ) : (
-                        <div className="aspect-[9/16] h-[40vh] md:h-[500px] max-w-full border-2 border-dashed border-slate-700 rounded-lg flex flex-col items-center justify-center text-slate-500 p-4 text-center">
-                            <Video className="w-12 h-12 mb-2 opacity-50" />
-                            <span>Preview Area</span>
-                        </div>
-                    )}
-                </div>
+          {/* RIGHT: Media & Export */}
+          <div className="md:col-span-4 flex flex-col overflow-y-auto custom-scrollbar bg-slate-900/30 p-4 space-y-6">
+              
+              {/* Image Control */}
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+                  <div className="flex justify-between items-center mb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center"><ImageIcon className="w-4 h-4 mr-2 text-purple-400"/> Hình Ảnh</h4>
+                      
+                      <div className="flex items-center space-x-2">
+                          {project.imageUrl && (
+                              <button onClick={handleDownloadImage} className="text-xs text-slate-400 hover:text-green-400 p-1 rounded hover:bg-slate-800" title="Tải ảnh về"><Download className="w-4 h-4"/></button>
+                          )}
+                          <button onClick={() => fileInputRef.current?.click()} className="text-xs text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800" title="Upload ảnh"><Upload className="w-4 h-4"/></button>
+                      </div>
+                      <input type="file" ref={fileInputRef} onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if(file) {
+                              const r = new FileReader();
+                              r.onload = () => onUpdateProject({
+                                  ...project, 
+                                  imageUrl: r.result as string,
+                                  imageSource: 'upload', // Mark as uploaded (free)
+                                  updatedAt: Date.now()
+                              });
+                              r.readAsDataURL(file);
+                          }
+                      }} className="hidden" />
+                  </div>
+                  <div 
+                      className="aspect-video bg-slate-950 rounded-lg overflow-hidden mb-3 border border-slate-800 relative group cursor-pointer hover:border-slate-600 transition-colors"
+                      onClick={() => fileInputRef.current?.click()}
+                  >
+                      {project.imageUrl ? (
+                          <>
+                              <img src={project.imageUrl} className="w-full h-full object-cover" />
+                              <div className="absolute top-2 right-2 px-2 py-1 bg-black/60 text-[10px] text-white rounded">
+                                  {project.imageSource === 'upload' ? 'Upload' : 'AI Gen'}
+                              </div>
+                          </>
+                      ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
+                              <Upload className="w-6 h-6 opacity-50"/>
+                              <span className="text-xs">Tải ảnh lên hoặc tạo AI</span>
+                          </div>
+                      )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                      <Button variant="secondary" onClick={handleGenerateImage} isLoading={loadingState.image} className="h-8 text-xs">Tạo Ảnh AI</Button>
+                      {hasVeoModels && (
+                        <Button variant="primary" onClick={handleGenerateVeo} isLoading={loadingState.veo} disabled={!project.imageUrl} className="h-8 text-xs bg-purple-600 hover:bg-purple-700">Tạo Video (Veo)</Button>
+                      )}
+                  </div>
+              </div>
 
-                <div className="space-y-4 bg-slate-800 p-4 rounded-xl border border-slate-700">
-                    <div className="flex items-center justify-between">
-                         <label className="text-sm font-medium text-slate-300 flex items-center"><Settings className="w-4 h-4 mr-2" /> Quality</label>
-                         <div className="flex space-x-2">
-                             <button onClick={() => setVideoQuality('720p')} className={`px-3 py-1 rounded text-xs border ${videoQuality === '720p' ? 'bg-indigo-600 border-indigo-500' : 'bg-slate-700 border-slate-600'}`}>720p</button>
-                             <button onClick={() => setVideoQuality('1080p')} className={`px-3 py-1 rounded text-xs border ${videoQuality === '1080p' ? 'bg-indigo-600 border-indigo-500' : 'bg-slate-700 border-slate-600'}`}>1080p</button>
-                         </div>
-                    </div>
-                    {!project.videoData ? (
-                        <Button onClick={handleExportVideo} isLoading={isExportingVideo} disabled={!project.imageUrl || !project.audioData} className="w-full h-12 text-lg">Render Video</Button>
-                    ) : (
-                         <div className="grid grid-cols-2 gap-3">
-                             <a href={project.videoData} download={`${project.title.replace(/\s+/g, '_')}_tiktok.webm`} className="w-full block">
-                                <Button variant="primary" className="w-full bg-green-600 hover:bg-green-700 h-12"><Download className="w-4 h-4 mr-2" /> Download</Button>
-                             </a>
-                             <Button onClick={handleExportVideo} isLoading={isExportingVideo} variant="secondary" className="w-full h-12"><RefreshCw className="w-4 h-4 mr-2" /> Re-Render</Button>
-                         </div>
-                    )}
-                </div>
-            </div>
-        </div>
-      )}
+              {/* Veo Preview (if exists) */}
+              {project.animatedVideoData && (
+                  <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+                      <h4 className="text-sm font-bold text-white mb-2 flex items-center"><Clapperboard className="w-4 h-4 mr-2 text-pink-500"/> Hoạt Hình (Veo)</h4>
+                      <video src={project.animatedVideoData} controls autoPlay loop className="w-full rounded border border-slate-800" />
+                  </div>
+              )}
+
+              {/* Audio Control */}
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+                  <div className="flex justify-between items-center mb-3">
+                      <h4 className="text-sm font-bold text-white flex items-center"><Music className="w-4 h-4 mr-2 text-indigo-400"/> Giọng Đọc</h4>
+                      {audioBuffer && (
+                          <button onClick={handleDownloadAudio} className="text-xs text-slate-400 hover:text-green-400 p-1 rounded hover:bg-slate-800" title="Tải Audio WAV"><Download className="w-4 h-4"/></button>
+                      )}
+                  </div>
+                  <div className="mb-3">
+                      <label className="text-xs text-slate-500 block mb-1">Chọn Giọng</label>
+                      <select value={config.voice} onChange={(e) => updateConfig('voice', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-white">
+                          {VOICE_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                      </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                      <Button variant="secondary" onClick={handleGenerateAudio} isLoading={loadingState.audio} className="h-8 text-xs">Tạo Giọng Đọc</Button>
+                      <Button variant="primary" onClick={togglePlayback} disabled={!audioBuffer} className="h-8 text-xs bg-indigo-600">
+                          {isPlaying ? <Pause className="w-3 h-3 mr-1"/> : <Play className="w-3 h-3 mr-1"/>} Nghe Thử
+                      </Button>
+                  </div>
+              </div>
+
+              {/* Export Control */}
+              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex-grow flex flex-col">
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center"><Video className="w-4 h-4 mr-2 text-green-400"/> Xuất Video (Final)</h4>
+                  
+                  <div className="bg-slate-950 rounded border border-slate-800 flex-grow flex items-center justify-center mb-3 min-h-[150px]">
+                      {project.videoData ? (
+                          <video src={project.videoData} controls className="max-h-[200px] w-auto" />
+                      ) : <div className="text-xs text-slate-600 text-center px-4">Hãy tạo Audio và Ảnh trước</div>}
+                  </div>
+
+                  <div className="space-y-3 mt-auto">
+                      <div className="flex justify-between items-center">
+                          <div className="flex space-x-1">
+                              <button onClick={() => setVideoQuality('720p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '720p' ? 'bg-indigo-600 border-indigo-500 text-white' : 'border-slate-700 text-slate-400'}`}>720p</button>
+                              <button onClick={() => setVideoQuality('1080p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '1080p' ? 'bg-indigo-600 border-indigo-500 text-white' : 'border-slate-700 text-slate-400'}`}>1080p</button>
+                          </div>
+                          <button onClick={() => setShowSubtitles(!showSubtitles)} className={`flex items-center text-[10px] px-2 py-1 rounded border ${showSubtitles ? 'bg-indigo-900/50 text-indigo-300 border-indigo-700' : 'border-slate-700 text-slate-500'}`}>
+                              <Captions className="w-3 h-3 mr-1"/> Phụ đề {showSubtitles ? 'BẬT' : 'TẮT'}
+                          </button>
+                      </div>
+
+                      {project.videoData ? (
+                           <div className="grid grid-cols-2 gap-2">
+                               <a href={project.videoData} download="story.webm" className="block w-full"><Button className="w-full h-9 text-xs bg-green-600 hover:bg-green-700"><Download className="w-3 h-3 mr-1"/> Tải Xuống</Button></a>
+                               <Button variant="secondary" onClick={handleExportVideo} isLoading={loadingState.video} className="h-9 text-xs">Render Lại</Button>
+                           </div>
+                      ) : (
+                          <Button variant="primary" onClick={handleExportVideo} isLoading={loadingState.video} disabled={!project.imageUrl || !project.audioData} className="w-full h-9 text-xs">Render Video</Button>
+                      )}
+                  </div>
+              </div>
+
+          </div>
+      </div>
     </div>
   );
 };

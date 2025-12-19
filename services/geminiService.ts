@@ -1,14 +1,26 @@
-import { GoogleGenAI, Modality, Type } from "@google/genai";
-import { StoryConfig, Language } from '../types';
+
+import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/genai";
+import { StoryConfig, Language, UsageStats } from '../types';
 import { APP_SETTINGS } from '../settings';
 
 // Helper to ensure fresh instance with latest key (important for paid features like Veo)
 const getAiClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+const extractUsage = (response: any): UsageStats => {
+  const usage = response.usageMetadata;
+  return {
+    promptTokens: usage?.promptTokenCount || 0,
+    candidatesTokens: usage?.candidatesTokenCount || 0,
+    totalTokens: usage?.totalTokenCount || 0,
+  };
+};
+
 // --- 1. Story Generation ---
-export const generateStoryText = async (config: StoryConfig): Promise<{ title: string; content: string }> => {
+export const generateStoryText = async (
+  config: StoryConfig, 
+  modelName: string
+): Promise<{ title: string; content: string; usage: UsageStats }> => {
   const ai = getAiClient();
-  const model = APP_SETTINGS.MODELS.STORY;
   
   const langInstruction = config.language === Language.VI 
     ? "WRITE THE STORY STRICTLY IN VIETNAMESE." 
@@ -37,7 +49,7 @@ export const generateStoryText = async (config: StoryConfig): Promise<{ title: s
 
   try {
     const response = await ai.models.generateContent({
-      model,
+      model: modelName,
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -53,7 +65,11 @@ export const generateStoryText = async (config: StoryConfig): Promise<{ title: s
     });
 
     const jsonText = response.text || "{}";
-    return JSON.parse(jsonText);
+    const data = JSON.parse(jsonText);
+    return {
+        ...data,
+        usage: extractUsage(response)
+    };
   } catch (error) {
     console.error("Story generation failed:", error);
     throw new Error("Failed to generate story text.");
@@ -61,35 +77,55 @@ export const generateStoryText = async (config: StoryConfig): Promise<{ title: s
 };
 
 // --- 2. Image Generation ---
-export const generateStoryImage = async (storyTitle: string, storySummary: string): Promise<string> => {
+export const generateStoryImage = async (
+    storyTitle: string, 
+    storySummary: string,
+    modelName: string
+): Promise<{ imageData: string; usage: UsageStats }> => {
   const ai = getAiClient();
-  const model = APP_SETTINGS.MODELS.IMAGE;
+  // Using 300 chars of context
   const prompt = `Create a cinematic, digital illustration for a story book cover. Title: "${storyTitle}". Context: ${storySummary.substring(0, 300)}... No text on image. High fantasy art style, atmospheric lighting.`;
 
   try {
     const response = await ai.models.generateContent({
-      model,
+      model: modelName,
       contents: prompt,
+      // Note: Image models don't support responseMimeType/responseSchema usually
     });
+
+    let imageData = `https://picsum.photos/1280/720?grayscale&blur=2`;
 
     for (const candidate of response.candidates || []) {
       for (const part of candidate.content.parts) {
         if (part.inlineData && part.inlineData.data) {
-          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          imageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          break;
         }
       }
     }
-    return `https://picsum.photos/1280/720?grayscale&blur=2`;
+    
+    return {
+      imageData,
+      usage: extractUsage(response)
+    };
   } catch (error) {
     console.error("Image generation failed:", error);
-    return `https://picsum.photos/1280/720?grayscale&blur=2`; 
+    // Fallback to placeholder on error to not break flow, return 0 usage
+    return {
+      imageData: `https://picsum.photos/1280/720?grayscale&blur=2`,
+      usage: { promptTokens: 0, candidatesTokens: 0, totalTokens: 0 }
+    };
   }
 };
 
 // --- 3. Audio Generation (TTS) ---
-export const generateStoryAudio = async (text: string, voiceName: string, language: Language): Promise<string> => {
+export const generateStoryAudio = async (
+    text: string, 
+    voiceName: string, 
+    language: Language,
+    modelName: string
+): Promise<{ audioData: string; usage: UsageStats }> => {
   const ai = getAiClient();
-  const model = APP_SETTINGS.MODELS.AUDIO;
   const MAX_CHARS = APP_SETTINGS.LIMITS.MAX_TTS_CHARS;
   
   if (!text || text.trim().length === 0) throw new Error("No text provided for audio generation");
@@ -104,10 +140,10 @@ export const generateStoryAudio = async (text: string, voiceName: string, langua
     console.log(`Generating audio for ${textToSpeak.length} characters with voice ${voiceName}`);
     
     const response = await ai.models.generateContent({
-      model,
+      model: modelName,
       contents: [{ parts: [{ text: textToSpeak }] }],
       config: {
-        responseModalities: ["AUDIO" as any], 
+        responseModalities: [Modality.AUDIO], // Use the Enum strictly
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName },
@@ -122,7 +158,10 @@ export const generateStoryAudio = async (text: string, voiceName: string, langua
     const base64Audio = candidate.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("No audio data returned from API");
 
-    return base64Audio;
+    return {
+        audioData: base64Audio,
+        usage: extractUsage(response)
+    };
   } catch (error: any) {
     console.error("Audio generation failed details:", error);
     throw new Error(error.message || "Failed to generate audio.");
@@ -130,9 +169,8 @@ export const generateStoryAudio = async (text: string, voiceName: string, langua
 };
 
 // --- 4. Veo Video Generation ---
-export const generateVeoVideo = async (imageBase64: string): Promise<string> => {
+export const generateVeoVideo = async (imageBase64: string, modelName: string): Promise<string> => {
   const ai = getAiClient();
-  const model = APP_SETTINGS.MODELS.VEO;
 
   // Extract base64 data and mimeType from data URL (e.g. "data:image/png;base64,.....")
   const match = imageBase64.match(/^data:(image\/[a-z]+);base64,(.+)$/);
@@ -142,12 +180,9 @@ export const generateVeoVideo = async (imageBase64: string): Promise<string> => 
   const imageBytes = match[2];
 
   try {
-    // Determine aspect ratio based on image or default to 9:16 for mobile
-    // Veo fast preview supports 16:9 or 9:16.
-    
     let operation = await ai.models.generateVideos({
-      model,
-      prompt: "Cinematic motion, atmospheric lighting, high quality, 4k", // Prompt is required/optional but good to have
+      model: modelName,
+      prompt: "Cinematic motion, atmospheric lighting, high quality, 4k", 
       image: {
         imageBytes,
         mimeType,
@@ -155,15 +190,14 @@ export const generateVeoVideo = async (imageBase64: string): Promise<string> => 
       config: {
         numberOfVideos: 1,
         resolution: '720p',
-        aspectRatio: '9:16' // Defaulting to portrait for this app context
+        aspectRatio: '9:16'
       }
     });
 
     console.log("Veo operation started...");
 
-    // Poll for completion
     while (!operation.done) {
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Poll every 5s
+      await new Promise(resolve => setTimeout(resolve, 5000));
       console.log("Polling Veo status...");
       operation = await ai.operations.getVideosOperation({operation: operation});
     }
@@ -171,12 +205,9 @@ export const generateVeoVideo = async (imageBase64: string): Promise<string> => 
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
     if (!videoUri) throw new Error("Veo generation finished but no video URI returned.");
 
-    // Fetch the video content
-    // Important: Append API Key to download link
-    const videoResponse = await fetch(`${videoUri}&key=${process.env.API_KEY}`);
-    const videoBlob = await videoResponse.blob();
+    const response = await fetch(`${videoUri}&key=${process.env.API_KEY}`);
+    const videoBlob = await response.blob();
 
-    // Convert to base64 to store in project (consistent with other assets)
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);

@@ -1,67 +1,102 @@
+
 # FableForge AI
 
-FableForge AI is an intelligent storytelling studio that uses Google's Gemini models to generate stories, create cover art, narrate text with natural voices, and export vertical videos for social media.
+FableForge AI is an advanced AI-powered storytelling studio. It leverages the latest Google Gemini models to generate creative stories, visualize them with AI art (or user uploads), narrate them with natural voices, and export complete audiovisual experiences for social media.
 
-## Features
+## 🚀 Features
 
-*   **Story Generation:** Uses `gemini-3-pro-preview` to write creative stories based on user prompts.
-*   **Text-to-Speech:** Uses `gemini-2.5-flash-preview-tts` for natural narration.
-*   **Image Generation:** Uses `gemini-2.5-flash-image` for cover art.
-*   **Video Animation (Veo):** Uses `veo-3.1-fast-generate-preview` to animate static cover images.
-*   **Video Export:** Generates vertical (9:16) videos suitable for TikTok/Reels by combining imagery and audio.
+### 📝 Creative Storytelling
+*   **Multi-Model Support:** Choose between speed (`Gemini 2.5 Flash`) or high intelligence (`Gemini 3 Pro`, `Gemini 2.5 Pro`).
+*   **Bilingual:** Native support for **Vietnamese** and **English** story generation.
+*   **Customization:** Configure Genre, Tone, Length, and specific story ideas.
 
-## Prerequisites
+### 🎨 Flexible Visuals
+*   **AI Generation:** Create cinematic book covers using `Gemini 2.5 Flash Image` or `Gemini 3 Pro Image`.
+*   **User Uploads:** Upload your own images to use in the story video (Free of inference cost).
+*   **Cost Tracking:** Automatically distinguishes between AI-generated and uploaded images for accurate cost estimation.
 
-*   Node.js (v18 or higher recommended)
-*   npm or yarn
+### 🎙️ Natural Narration (TTS)
+*   **Long-form Audio:** Support for up to **10,000 characters** per generation.
+*   **Diverse Voices:** Choose from 5 distinct AI voices (Puck, Charon, Kore, Fenrir, Zephyr).
+*   **Downloadable:** Export raw audio as `.wav` files.
 
-## Setup & Installation
+### 🎬 Video Production
+*   **Veo Animation:** Animate static images into 4K/1080p videos using Google's **Veo** model (Requires paid API key).
+*   **Social Export:** Render final videos in vertical format (9:16) or slideshows with:
+    *   Synced Audio
+    *   Automatic Subtitles (with timing calculation)
+    *   Background Music/Atmosphere
+*   **Downloadable:** Export final videos as `.webm`.
 
-1.  **Clone the repository** (or extract the source code).
+### 💰 Usage & Analytics
+*   **Real-time Cost Estimation:** Tracks prompt and candidate tokens for Story, Audio, and Image generation.
+*   **Token Stats:** Detailed breakdown of tokens used per project.
 
-2.  **Install dependencies:**
+## 🛠 Prerequisites
+
+*   **Node.js** (v18 or higher recommended)
+*   **npm** or **yarn**
+
+## 📦 Setup & Installation
+
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/yourusername/fableforge-ai.git
+    cd fableforge-ai
+    ```
+
+2.  **Install dependencies**:
     ```bash
     npm install
     ```
 
-3.  **Configure API Key:**
+3.  **Configure API Key**:
     *   Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
-    *   Create a file named `.env` in the root directory of the project.
-    *   Add your API key to the file:
+    *   Create a file named `.env` in the root directory.
+    *   Add your API key:
         ```env
         API_KEY=your_actual_api_key_here
         ```
 
-    *Note: The application uses `process.env.API_KEY`. Ensure your build tool (Vite/Parcel/Webpack) is configured to expose this environment variable.*
-
-4.  **Run the application:**
+4.  **Run the application**:
     ```bash
     npm start
     # or
     npm run dev
     ```
 
-5.  **Open in Browser:**
-    Navigate to `http://localhost:1234` (or the port shown in your terminal).
+5.  **Open in Browser**:
+    Navigate to the local server URL shown in your terminal (usually `http://localhost:1234`).
 
-## Configuration
+## ⚙️ Configuration
 
-You can change the AI models used in the application by editing `settings.ts`:
+You can customize the application settings, available models, and pricing estimates in `settings.ts`.
 
 ```typescript
 export const APP_SETTINGS = {
-  MODELS: {
-    STORY: "gemini-3-pro-preview",
-    IMAGE: "gemini-2.5-flash-image",
-    AUDIO: "gemini-2.5-flash-preview-tts",
-    VEO: "veo-3.1-fast-generate-preview"
+  AVAILABLE_MODELS: {
+    STORY: [ ... ], // Add or remove text models
+    IMAGE: [ ... ], // Add or remove image models
+    AUDIO: [ ... ], // Add or remove TTS models
+    VEO:   [ ... ]  // Add or remove Video generation models
+  },
+  LIMITS: {
+    MAX_TTS_CHARS: 10000, // Configure text-to-speech character limit
   },
   // ...
 };
 ```
 
-## Troubleshooting
+## ⚠️ Important Notes
 
-*   **403/401 Errors:** Check that your `API_KEY` in the `.env` file is correct and has credits/billing enabled if required.
-*   **Storage Quota Exceeded:** The app stores generated media in `localStorage`. If you see a storage warning, delete old projects or assets using the trash icons in the app.
-*   **Veo Generation:** Requires a paid API key and billing enabled on the Google Cloud Project.
+*   **API Costs:** While many "Preview" models are free within limits, "Pro" and "Veo" models may incur costs on your Google Cloud billing account. The app provides an *estimation* only.
+*   **Veo Generation:** This feature specifically requires a billing-enabled project. The app will prompt you to select a paid key via the `window.aistudio` interface if available, or rely on your `.env` key.
+*   **Local Storage:** Projects and generated media (base64) are stored in your browser's `localStorage`. Clearing cache will delete your projects. Export your media to save it permanently.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is open-source and available under the MIT License.

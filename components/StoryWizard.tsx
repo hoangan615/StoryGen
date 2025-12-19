@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
 import { Wand2, BookOpen, Music, Mic, Globe } from 'lucide-react';
-import { GENRES, TONES, LENGTHS, VOICES, SAMPLE_PROMPTS, LANGUAGES } from '../constants';
+import { GENRES, TONES, LENGTHS, VOICE_OPTIONS, SAMPLE_PROMPTS, LANGUAGES } from '../constants';
 import { StoryConfig, Genre, Tone, StoryLength, VoiceName, Language } from '../types';
 import Button from './Button';
 
@@ -13,8 +14,8 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
   const [config, setConfig] = useState<StoryConfig>({
     idea: '',
     language: Language.EN, // Default
-    genre: Genre.FANTASY,
-    tone: Tone.WHIMSICAL,
+    genre: Genre.CO_TICH,
+    tone: Tone.VUI_VE,
     length: StoryLength.SHORT,
     voice: VoiceName.Puck
   });
@@ -141,7 +142,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none"
               disabled={isGenerating}
             >
-              {VOICES.map(v => <option key={v} value={v}>{v}</option>)}
+              {VOICE_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
             </select>
           </div>
         </div>
