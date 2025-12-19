@@ -31,6 +31,21 @@
         background: #64748b; 
       }
     </style>
+    <script>
+      // =================================================================
+      // CẤU HÌNH API KEY (QUAN TRỌNG)
+      // =================================================================
+      // 1. Truy cập: https://aistudio.google.com/app/apikey để lấy Key
+      // 2. Dán Key vào giữa dấu ngoặc kép ở dòng 'API_KEY': "..." bên dưới
+      // =================================================================
+      
+      window.process = {
+        env: {
+          NODE_ENV: 'development',
+          API_KEY: "" // <--- DÁN API KEY CỦA BẠN VÀO ĐÂY (VÍ DỤ: "AIzaSyD...")
+        }
+      };
+    </script>
   <script type="importmap">
 {
   "imports": {
@@ -45,5 +60,6 @@
 </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

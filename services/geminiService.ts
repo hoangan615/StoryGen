@@ -3,8 +3,28 @@ import { GoogleGenAI, Modality, Type, GenerateContentResponse } from "@google/ge
 import { StoryConfig, Language, UsageStats } from '../types';
 import { APP_SETTINGS } from '../settings';
 
+// Helper to safely get API Key from multiple sources
+const getApiKey = (): string => {
+  // 1. Check for build-tool injected env vars (Vite/Parcel/Webpack)
+  if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+    return process.env.API_KEY;
+  }
+  // 2. Check for window polyfill (defined in index.html)
+  if (typeof window !== 'undefined' && (window as any).process?.env?.API_KEY) {
+    return (window as any).process.env.API_KEY;
+  }
+  return '';
+};
+
 // Helper to ensure fresh instance with latest key (important for paid features like Veo)
-const getAiClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAiClient = () => {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error("❌ API KEY MISSING! Please add it to index.html or .env file.");
+    throw new Error("API Key chưa được cấu hình. Vui lòng mở file index.html và điền API Key vào mục window.process.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 const extractUsage = (response: any): UsageStats => {
   const usage = response.usageMetadata;
@@ -205,7 +225,8 @@ export const generateVeoVideo = async (imageBase64: string, modelName: string): 
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
     if (!videoUri) throw new Error("Veo generation finished but no video URI returned.");
 
-    const response = await fetch(`${videoUri}&key=${process.env.API_KEY}`);
+    const apiKey = getApiKey(); // Ensure we use the retrieved key for fetching
+    const response = await fetch(`${videoUri}&key=${apiKey}`);
     const videoBlob = await response.blob();
 
     return new Promise((resolve, reject) => {

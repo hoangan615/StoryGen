@@ -51,12 +51,20 @@ FableForge AI is an advanced AI-powered storytelling studio. It leverages the la
     ```
 
 3.  **Configure API Key**:
-    *   Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
-    *   Create a file named `.env` in the root directory.
-    *   Add your API key:
+    You have two ways to configure the API Key. Get your key from [Google AI Studio](https://aistudio.google.com/).
+
+    **Option A: Environment File (Recommended)**
+    1.  Open the file `.env.local` in the root directory.
+    2.  Paste your API key:
         ```env
-        API_KEY=your_actual_api_key_here
+        API_KEY=AIzaSy...
         ```
+    3.  *Note:* Depending on your build tool (Vite/Parcel), you might need to rename this to `.env`.
+
+    **Option B: Direct Config (Quick Start)**
+    1.  Open `index.html`.
+    2.  Find the `<script>` tag with `window.process`.
+    3.  Paste your key directly into the `API_KEY` field.
 
 4.  **Run the application**:
     ```bash
@@ -66,7 +74,7 @@ FableForge AI is an advanced AI-powered storytelling studio. It leverages the la
     ```
 
 5.  **Open in Browser**:
-    Navigate to the local server URL shown in your terminal (usually `http://localhost:1234`).
+    Navigate to the local server URL shown in your terminal (usually `http://localhost:1234` or `http://localhost:5173`).
 
 ## ⚙️ Configuration
 
