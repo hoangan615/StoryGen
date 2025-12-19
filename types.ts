@@ -61,6 +61,8 @@ export interface Project {
   status: ProjectStatus;
   imageUrl?: string;
   audioData?: string;
+  videoData?: string; // Base64 canvas video data (Slideshow)
+  animatedVideoData?: string; // Base64 Veo video data (AI Animation)
   createdAt: number;
   updatedAt: number;
 }

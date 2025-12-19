@@ -1,5 +1,6 @@
 /**
- * Decodes a base64 string into an AudioBuffer using the Web Audio API.
+ * Decodes Gemini's Raw PCM base64 string into an AudioBuffer.
+ * Gemini 2.5 TTS returns raw linear-16 PCM, 24kHz, Mono.
  */
 export const decodeAudio = async (base64Data: string, audioContext: AudioContext): Promise<AudioBuffer> => {
   const binaryString = window.atob(base64Data);
@@ -9,24 +10,62 @@ export const decodeAudio = async (base64Data: string, audioContext: AudioContext
     bytes[i] = binaryString.charCodeAt(i);
   }
   
-  // Important: We need to copy the buffer because decodeAudioData detaches it
-  const bufferCopy = bytes.buffer.slice(0);
-  return await audioContext.decodeAudioData(bufferCopy);
+  // Gemini Output Specs:
+  const sampleRate = 24000;
+  const numChannels = 1;
+
+  // Convert Raw PCM (Int16) to Float32 for Web Audio API
+  // Int16Array reads 2 bytes per sample from the Uint8Array buffer
+  const int16Data = new Int16Array(bytes.buffer);
+  const float32Data = new Float32Array(int16Data.length);
+
+  for (let i = 0; i < int16Data.length; i++) {
+    // Normalize 16-bit integer (-32768 to 32767) to floating point (-1.0 to 1.0)
+    float32Data[i] = int16Data[i] / 32768.0;
+  }
+
+  // Create the AudioBuffer
+  const buffer = audioContext.createBuffer(numChannels, float32Data.length, sampleRate);
+  
+  // Copy data to the buffer's channel 0
+  buffer.copyToChannel(float32Data, 0);
+
+  return buffer;
 };
+
+export const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      resolve(result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
+
+interface VideoOptions {
+  width: number;
+  height: number;
+  fps?: number;
+  bitrate?: number;
+}
 
 /**
  * Creates a video from a static image and an audio buffer using HTML5 Canvas and MediaRecorder.
- * Returns a Blob URL for the generated .webm video.
+ * Returns a Blob.
  */
 export const generateVideoBlob = async (
   imageUrl: string,
-  audioBuffer: AudioBuffer
-): Promise<string> => {
+  audioBuffer: AudioBuffer,
+  options: VideoOptions
+): Promise<Blob> => {
   return new Promise((resolve, reject) => {
     // 1. Setup Canvas
     const canvas = document.createElement('canvas');
-    const width = 1280;
-    const height = 720;
+    const width = options.width;
+    const height = options.height;
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
@@ -42,15 +81,24 @@ export const generateVideoBlob = async (
     img.src = imageUrl;
     
     img.onload = () => {
-      // Draw image to canvas (cover style)
-      const ratio = Math.max(width / img.width, height / img.height);
-      const x = (width - img.width * ratio) / 2;
-      const y = (height - img.height * ratio) / 2;
-      ctx.drawImage(img, 0, 0, img.width, img.height, x, y, img.width * ratio, img.height * ratio);
+      // Draw image to canvas (Center Crop / Object Cover)
+      const scale = Math.max(width / img.width, height / img.height);
+      const x = (width - img.width * scale) / 2;
+      const y = (height - img.height * scale) / 2;
       
-      // Add a subtle overlay for text readability (optional, purely aesthetic here as we don't draw text)
-      ctx.fillStyle = "rgba(0,0,0,0.3)";
-      ctx.fillRect(0,0, width, height);
+      // Draw black background first
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, width, height);
+      
+      // Draw image
+      ctx.drawImage(img, 0, 0, img.width, img.height, x, y, img.width * scale, img.height * scale);
+      
+      // Add a gradient overlay for text readability (TikTok style bottom fade)
+      const gradient = ctx.createLinearGradient(0, height * 0.7, 0, height);
+      gradient.addColorStop(0, "rgba(0,0,0,0)");
+      gradient.addColorStop(1, "rgba(0,0,0,0.6)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, height * 0.7, width, height * 0.3);
 
       startRecording();
     };
@@ -59,20 +107,16 @@ export const generateVideoBlob = async (
 
     const startRecording = () => {
       // 3. Setup Audio Processing
-      // We need an offline context to render the audio-video mix fast, 
-      // BUT MediaRecorder works in real-time on a MediaStream.
-      // To keep it simple and robust on frontend: We play the audio into a destination node
-      // and capture the canvas stream.
-      
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const dest = audioCtx.createMediaStreamDestination();
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(dest);
-      source.connect(audioCtx.destination); // Optional: hear it while rendering (muted for export usually)
+      // Optional: connect to speakers if you want to hear it while rendering
+      // source.connect(audioCtx.destination); 
 
       // 4. Create MediaStream (Canvas Video + WebAudio Audio)
-      const canvasStream = canvas.captureStream(30); // 30 FPS
+      const canvasStream = canvas.captureStream(options.fps || 30);
       const combinedStream = new MediaStream([
         ...canvasStream.getVideoTracks(),
         ...dest.stream.getAudioTracks()
@@ -83,12 +127,15 @@ export const generateVideoBlob = async (
       let recorder: MediaRecorder;
       
       try {
-         // Prefer VP9 for better quality/size ratio if available, else standard webm
+        // Prefer VP9/WebM, fallback to standard
         const mimeType = MediaRecorder.isTypeSupported('video/webm; codecs=vp9') 
           ? 'video/webm; codecs=vp9' 
           : 'video/webm';
         
-        recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 2500000 });
+        recorder = new MediaRecorder(combinedStream, { 
+          mimeType, 
+          videoBitsPerSecond: options.bitrate || 2500000 
+        });
       } catch (e) {
         reject(new Error("MediaRecorder not supported or mimeType invalid"));
         return;
@@ -100,9 +147,8 @@ export const generateVideoBlob = async (
 
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
         audioCtx.close();
-        resolve(url);
+        resolve(blob);
       };
 
       // 6. Start Sync

@@ -79,7 +79,12 @@ const StoryResult: React.FC<StoryResultProps> = ({ story, onReset }) => {
     
     setIsExportingVideo(true);
     try {
-      const url = await generateVideoBlob(story.imageUrl, audioBuffer);
+      const blob = await generateVideoBlob(story.imageUrl, audioBuffer, {
+        width: 720,
+        height: 1280,
+        fps: 30
+      });
+      const url = URL.createObjectURL(blob);
       setVideoUrl(url);
     } catch (e) {
       console.error("Video export failed", e);
