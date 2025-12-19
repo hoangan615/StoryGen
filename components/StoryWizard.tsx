@@ -75,7 +75,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
           <div className="relative">
             <textarea
               value={config.idea}
-              onChange={(e) => handleInputChange('idea', e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => handleInputChange('idea', e.target.value)}
               placeholder={config.language === Language.VI ? "Ví dụ: Một cô gái tìm thấy chiếc đồng hồ quay ngược thời gian..." : "E.g., A lonely astronaut finds a flower on Mars..."}
               className="w-full h-32 bg-slate-900/80 border border-slate-700 rounded-xl p-4 text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none transition-all"
               disabled={isGenerating}
@@ -98,7 +98,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
             </label>
             <select
               value={config.genre}
-              onChange={(e) => handleInputChange('genre', e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleInputChange('genre', e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none"
               disabled={isGenerating}
             >
@@ -112,7 +112,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
             </label>
             <select
               value={config.tone}
-              onChange={(e) => handleInputChange('tone', e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleInputChange('tone', e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none"
               disabled={isGenerating}
             >
@@ -124,7 +124,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
             <label className="block text-sm font-medium text-slate-300">Length</label>
             <select
               value={config.length}
-              onChange={(e) => handleInputChange('length', e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleInputChange('length', e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none"
               disabled={isGenerating}
             >
@@ -138,7 +138,7 @@ const StoryWizard: React.FC<StoryWizardProps> = ({ onGenerate, isGenerating }) =
             </label>
             <select
               value={config.voice}
-              onChange={(e) => handleInputChange('voice', e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleInputChange('voice', e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 focus:ring-2 focus:ring-indigo-500 outline-none"
               disabled={isGenerating}
             >

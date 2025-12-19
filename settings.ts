@@ -23,39 +23,32 @@ export const APP_SETTINGS = {
   },
   
   // Pricing Estimation (USD) based on standard Google Cloud pricing
-  // Input: Per 1 Million Tokens | Output: Per 1 Million Tokens
-  // Note: "Preview" models in AI Studio are often Free within limits, but mapped here to their expected production costs.
   PRICING: {
-    // --- Flash Lite (Rẻ nhất) ---
     'gemini-2.5-flash-lite': { input: 0.0375, output: 0.15 },
     'gemini-2.5-flash-lite-preview-09-2025': { input: 0.0375, output: 0.15 },
     'gemini-2.0-flash-lite': { input: 0.0375, output: 0.15 },
-
-    // --- Flash Standard (Rẻ & Nhanh) ---
     'gemini-2.5-flash': { input: 0.075, output: 0.30 },
     'gemini-2.5-flash-preview-09-2025': { input: 0.075, output: 0.30 },
-    'gemini-3-flash-preview': { input: 0.075, output: 0.30 }, // Ước tính
+    'gemini-3-flash-preview': { input: 0.075, output: 0.30 },
     'gemini-2.0-flash': { input: 0.10, output: 0.40 },
-
-    // --- Pro (Thông minh - Đắt) ---
-    'gemini-2.5-pro': { input: 3.50, output: 10.50 }, // Giá cao
-    'gemini-3-pro-preview': { input: 3.50, output: 10.50 }, // Ước tính tương đương Pro
-
-    // --- Images (Per Image) ---
+    'gemini-2.5-pro': { input: 3.50, output: 10.50 },
+    'gemini-3-pro-preview': { input: 3.50, output: 10.50 },
     'gemini-2.5-flash-image': { perUnit: 0.04 }, 
-    'gemini-3-pro-image-preview': { perUnit: 0.08 }, // Chất lượng cao hơn
-
-    // --- Audio / TTS (Estimated per request or char count) ---
-    // Flash TTS is roughly equivalent to standard TTS pricing (~$4 per 1M chars)
+    'gemini-3-pro-image-preview': { perUnit: 0.08 },
     'gemini-2.5-flash-preview-tts': { per1kChars: 0.004 }, 
     'gemini-2.5-pro-preview-tts': { per1kChars: 0.008 },
-    'gemini-2.5-flash-native-audio-preview-12-2025': { input: 0.075, output: 0.30 } // Token based audio
+    'gemini-2.5-flash-native-audio-preview-12-2025': { input: 0.075, output: 0.30 }
   },
 
   LIMITS: {
     MAX_TTS_CHARS: 10000,
   },
   VIDEO: {
+    FPS_OPTIONS: [
+        { value: 15, label: "15 FPS (Nhanh - Nhẹ máy)" },
+        { value: 30, label: "30 FPS (Mượt mà)" },
+        { value: 60, label: "60 FPS (Cao cấp - Nặng)" }
+    ],
     DEFAULT_FPS: 30,
     QUALITY: {
       '720p': {

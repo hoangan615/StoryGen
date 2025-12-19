@@ -1,13 +1,15 @@
+/// <reference lib="dom" />
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Project, Genre, Tone, StoryLength, VoiceName, Language } from '../types';
 import { GENRES, TONES, LENGTHS, VOICE_OPTIONS, LANGUAGES } from '../constants';
 import { APP_SETTINGS } from '../settings';
 import { generateStoryAudio, generateStoryImage, generateStoryText, generateVeoVideo } from '../services/geminiService';
-import { decodeAudio, generateVideoBlob, blobToBase64, audioBufferToWav } from '../utils/mediaUtils';
+import { decodeAudio, generateVideoBlob, blobToBase64, audioBufferToWav, generateSRTString } from '../utils/mediaUtils';
+import { renderVideoViaServer } from '../utils/serverRender'; 
 import { calculateCost, formatCurrency } from '../utils/costUtils';
 import Button from './Button';
-import { Play, Pause, Video, Save, ArrowLeft, Download, RefreshCw, PenTool, Image as ImageIcon, Music, Trash2, Settings, Upload, Clapperboard, Sparkles, Captions, Zap, Cpu, DollarSign } from 'lucide-react';
+import { Play, Pause, Video, Save, ArrowLeft, Download, PenTool, Image as ImageIcon, Music, DollarSign, Sparkles, Captions, Server, AlertCircle, Rocket, Cpu, Upload } from 'lucide-react';
 
 interface ProjectWorkspaceProps {
   project: Project;
@@ -23,7 +25,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
   const [models, setModels] = useState(project.models);
   const [editedContent, setEditedContent] = useState(project.content);
   
-  // Sync if project changes externally (e.g. from parent list), ONLY on ID change to preserve local edits
+  // Sync if project changes externally
   useEffect(() => { 
       setConfig(project.config);
       setModels(project.models);
@@ -36,10 +38,12 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
       image: false,
       audio: false,
       veo: false,
-      video: false
+      video: false,
+      server: false
   });
 
   const [videoQuality, setVideoQuality] = useState<VideoQuality>('720p');
+  const [videoFps, setVideoFps] = useState<number>(30); 
   const [showSubtitles, setShowSubtitles] = useState(true);
 
   // Audio Playback State
@@ -75,12 +79,11 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
   const currentCost = calculateCost(
     project.usage, 
     models, 
-    project.imageSource, // Pass image source (ai/upload)
+    project.imageSource, 
     !!project.animatedVideoData
   );
 
   // --- Handlers ---
-
   const updateConfig = (field: keyof typeof config, value: any) => {
       const newConfig = { ...config, [field]: value };
       setConfig(newConfig);
@@ -93,67 +96,37 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
       onUpdateProject({ ...project, models: newModels });
   };
 
+  // ... (Keep existing generation handlers) ...
   const handleGenerateStory = async () => {
     setLoadingState(prev => ({...prev, story: true}));
     try {
       const result = await generateStoryText(config, models.storyModel);
-      
       const updatedUsage = {
           ...project.usage,
           story: result.usage,
           total: (project.usage.total - project.usage.story.totalTokens) + result.usage.totalTokens
       };
-
       setEditedContent(result.content);
       onUpdateProject({ 
-          ...project, 
-          config, 
-          models, 
-          title: result.title,
-          content: result.content, 
-          usage: updatedUsage,
-          status: 'story_generated',
-          updatedAt: Date.now() 
+          ...project, config, models, title: result.title, content: result.content, usage: updatedUsage, status: 'story_generated', updatedAt: Date.now() 
       });
-    } catch (e: any) {
-      alert(`Lỗi tạo truyện: ${e.message}`);
-    } finally {
-      setLoadingState(prev => ({...prev, story: false}));
-    }
+    } catch (e: any) { alert(`Lỗi tạo truyện: ${e.message}`); } finally { setLoadingState(prev => ({...prev, story: false})); }
   };
 
   const handleGenerateAudio = async () => {
-    if (!editedContent.trim()) {
-        alert("Vui lòng nhập nội dung truyện trước khi tạo Audio!");
-        return;
-    }
+    if (!editedContent.trim()) { alert("Vui lòng nhập nội dung!"); return; }
     setLoadingState(prev => ({...prev, audio: true}));
     try {
-      // Use editedContent to ensure we narrate what is on screen
       const result = await generateStoryAudio(editedContent, config.voice, config.language, models.audioModel);
-      
       const updatedUsage = {
           ...project.usage,
           audio: result.usage,
-          // Recalculate total including image if it exists
           total: (project.usage.story.totalTokens) + result.usage.totalTokens + (project.usage.image?.totalTokens || 0)
       };
-
       onUpdateProject({ 
-          ...project, 
-          content: editedContent, // Save the text that was used for audio
-          config,
-          models,
-          audioData: result.audioData, 
-          usage: updatedUsage,
-          status: 'audio_generated', 
-          updatedAt: Date.now() 
+          ...project, content: editedContent, config, models, audioData: result.audioData, usage: updatedUsage, status: 'audio_generated', updatedAt: Date.now() 
       });
-    } catch (e: any) {
-      alert(`Lỗi tạo Audio: ${e.message}`);
-    } finally {
-      setLoadingState(prev => ({...prev, audio: false}));
-    }
+    } catch (e: any) { alert(`Lỗi tạo Audio: ${e.message}`); } finally { setLoadingState(prev => ({...prev, audio: false})); }
   };
 
   const handleGenerateImage = async () => {
@@ -161,29 +134,13 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
     try {
       const summary = editedContent.substring(0, 300) || config.idea;
       const { imageData, usage } = await generateStoryImage(project.title, summary, models.imageModel);
-      
       const updatedUsage = {
-          ...project.usage,
-          image: usage,
-          // Recalculate total
-          total: project.usage.story.totalTokens + project.usage.audio.totalTokens + usage.totalTokens
+          ...project.usage, image: usage, total: project.usage.story.totalTokens + project.usage.audio.totalTokens + usage.totalTokens
       };
-
       onUpdateProject({ 
-          ...project, 
-          content: editedContent,
-          config,
-          models,
-          imageUrl: imageData,
-          imageSource: 'ai', // Mark as AI generated for cost calc
-          usage: updatedUsage,
-          updatedAt: Date.now() 
+          ...project, content: editedContent, config, models, imageUrl: imageData, imageSource: 'ai', usage: updatedUsage, updatedAt: Date.now() 
       });
-    } catch (e: any) {
-      alert(`Lỗi tạo Ảnh: ${e.message}`);
-    } finally {
-      setLoadingState(prev => ({...prev, image: false}));
-    }
+    } catch (e: any) { alert(`Lỗi tạo Ảnh: ${e.message}`); } finally { setLoadingState(prev => ({...prev, image: false})); }
   };
 
   const handleGenerateVeo = async () => {
@@ -191,47 +148,61 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
     const win = window as any;
     if (win.aistudio) {
       const hasKey = await win.aistudio.hasSelectedApiKey();
-      if (!hasKey) {
-        try { await win.aistudio.openSelectKey(); } catch (e) { return; }
-      }
+      if (!hasKey) { try { await win.aistudio.openSelectKey(); } catch (e) { return; } }
     }
     setLoadingState(prev => ({...prev, veo: true}));
     try {
       const veoData = await generateVeoVideo(project.imageUrl, models.videoModel);
-      onUpdateProject({ 
-          ...project, 
-          animatedVideoData: veoData, 
-          updatedAt: Date.now() 
-      });
-    } catch (e: any) {
-      alert(`Lỗi tạo Veo Video: ${e.message}`);
-    } finally {
-      setLoadingState(prev => ({...prev, veo: false}));
-    }
+      onUpdateProject({ ...project, animatedVideoData: veoData, updatedAt: Date.now() });
+    } catch (e: any) { alert(`Lỗi tạo Veo Video: ${e.message}`); } finally { setLoadingState(prev => ({...prev, veo: false})); }
   };
 
-  const handleExportVideo = async () => {
+  // --- Browser Render (Canvas) ---
+  const handleExportVideoCanvas = async () => {
       if (!audioBuffer || !project.imageUrl) return;
       setLoadingState(prev => ({...prev, video: true}));
       try {
           const cfg = APP_SETTINGS.VIDEO.QUALITY[videoQuality];
           const blob = await generateVideoBlob(project.imageUrl, audioBuffer, {
-              width: cfg.WIDTH, height: cfg.HEIGHT, bitrate: cfg.BITRATE, fps: APP_SETTINGS.VIDEO.DEFAULT_FPS,
+              width: cfg.WIDTH, height: cfg.HEIGHT, bitrate: cfg.BITRATE, fps: videoFps,
               subtitles: showSubtitles ? editedContent : undefined 
           });
           const base64Video = await blobToBase64(blob);
           onUpdateProject({ ...project, videoData: base64Video, updatedAt: Date.now() });
-      } catch (e) {
-          alert('Lỗi xuất video');
-      } finally {
-          setLoadingState(prev => ({...prev, video: false}));
-      }
+      } catch (e) { alert('Lỗi xuất video'); } finally { setLoadingState(prev => ({...prev, video: false})); }
+  };
+
+  // --- Node.js Server Render ---
+  const handleExportVideoServer = async () => {
+    if (!audioBuffer || !project.imageUrl) return;
+    setLoadingState(prev => ({...prev, server: true}));
+    try {
+        const subtitlesText = showSubtitles ? editedContent : null;
+        const videoData = await renderVideoViaServer(
+            project.imageUrl,
+            audioBuffer,
+            subtitlesText
+        );
+        
+        // Save to project for preview/download
+        onUpdateProject({ ...project, videoData, updatedAt: Date.now() });
+        
+        // Auto Download
+        const a = document.createElement('a');
+        a.href = videoData;
+        a.download = `story-server-${project.id}.mp4`;
+        a.click();
+        
+    } catch (e: any) {
+        alert(`Lỗi Server Render: ${e.message}`);
+    } finally {
+        setLoadingState(prev => ({...prev, server: false}));
+    }
   };
 
   const togglePlayback = async () => {
     if (!audioContextRef.current || !audioBuffer) return;
     if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
-
     if (isPlaying) {
       sourceNodeRef.current?.stop();
       sourceNodeRef.current = null;
@@ -251,21 +222,11 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
 
   const handleDownloadImage = () => {
     if (!project.imageUrl) return;
-    const a = document.createElement('a');
-    a.href = project.imageUrl;
-    a.download = `image-${project.id}.png`; 
-    a.click();
+    const a = document.createElement('a'); a.href = project.imageUrl; a.download = `image-${project.id}.png`; a.click();
   };
-
   const handleDownloadAudio = () => {
     if (!audioBuffer) return;
-    const blob = audioBufferToWav(audioBuffer);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `audio-${project.id}.wav`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const blob = audioBufferToWav(audioBuffer); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `audio-${project.id}.wav`; a.click(); URL.revokeObjectURL(url);
   };
 
   const hasVeoModels = APP_SETTINGS.AVAILABLE_MODELS.VEO.length > 0;
@@ -280,7 +241,6 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
               <h1 className="text-xl font-serif font-bold text-white truncate max-w-md">{project.title || "Dự án mới"}</h1>
           </div>
           <div className="flex items-center space-x-4">
-              {/* Token Stats Summary */}
               <div className="hidden md:flex items-center space-x-3 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
                   <DollarSign className="w-4 h-4 text-green-400" />
                   <div className="text-xs text-slate-400">
@@ -296,33 +256,31 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
           
           {/* LEFT: Configuration Panel */}
           <div className="md:col-span-3 border-r border-slate-800 bg-slate-900/30 overflow-y-auto custom-scrollbar p-4 space-y-6">
-              
               {/* Story Settings */}
               <section className="space-y-4">
                   <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center"><PenTool className="w-4 h-4 mr-2"/> Cấu Hình Truyện</h3>
-                  
                   <div className="space-y-3">
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Ngôn Ngữ</label>
-                          <select value={config.language} onChange={(e) => updateConfig('language', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                          <select value={config.language} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateConfig('language', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
                               {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
                           </select>
                       </div>
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Thể Loại</label>
-                          <select value={config.genre} onChange={(e) => updateConfig('genre', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                          <select value={config.genre} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateConfig('genre', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
                               {GENRES.map(g => <option key={g} value={g}>{g}</option>)}
                           </select>
                       </div>
                       <div>
-                          <label className="text-xs text-slate-500 block mb-1">Tông Giọng / Cảm Xúc</label>
-                          <select value={config.tone} onChange={(e) => updateConfig('tone', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                          <label className="text-xs text-slate-500 block mb-1">Tông Giọng</label>
+                          <select value={config.tone} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateConfig('tone', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
                               {TONES.map(t => <option key={t} value={t}>{t}</option>)}
                           </select>
                       </div>
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Độ Dài</label>
-                          <select value={config.length} onChange={(e) => updateConfig('length', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
+                          <select value={config.length} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateConfig('length', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white">
                               {LENGTHS.map(l => <option key={l} value={l}>{l}</option>)}
                           </select>
                       </div>
@@ -330,7 +288,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
                           <label className="text-xs text-slate-500 block mb-1">Ý Tưởng / Prompt</label>
                           <textarea 
                               value={config.idea} 
-                              onChange={(e) => updateConfig('idea', e.target.value)}
+                              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateConfig('idea', e.target.value)}
                               className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white h-24 resize-none"
                               placeholder="Nhập ý tưởng câu chuyện..."
                           />
@@ -347,43 +305,24 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
                   <div className="space-y-3">
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Model Viết Truyện</label>
-                          <select value={models.storyModel} onChange={(e) => updateModel('storyModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                          <select value={models.storyModel} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateModel('storyModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
                               {APP_SETTINGS.AVAILABLE_MODELS.STORY.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                           </select>
                       </div>
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Model Tạo Ảnh</label>
-                          <select value={models.imageModel} onChange={(e) => updateModel('imageModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                          <select value={models.imageModel} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateModel('imageModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
                               {APP_SETTINGS.AVAILABLE_MODELS.IMAGE.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                           </select>
                       </div>
                       <div>
                           <label className="text-xs text-slate-500 block mb-1">Model Giọng Đọc (TTS)</label>
-                          <select value={models.audioModel} onChange={(e) => updateModel('audioModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
+                          <select value={models.audioModel} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateModel('audioModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
                               {APP_SETTINGS.AVAILABLE_MODELS.AUDIO.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                           </select>
                       </div>
-                      {hasVeoModels && (
-                          <div>
-                              <label className="text-xs text-slate-500 block mb-1">Model Video (Veo)</label>
-                              <select value={models.videoModel} onChange={(e) => updateModel('videoModel', e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-slate-300">
-                                  {APP_SETTINGS.AVAILABLE_MODELS.VEO.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                              </select>
-                          </div>
-                      )}
                   </div>
               </section>
-
-              <div className="pt-4">
-                   <div className="bg-slate-900 rounded p-3 text-xs space-y-2 border border-slate-800">
-                      <p className="font-bold text-slate-400">Token Đã Dùng:</p>
-                      <div className="flex justify-between"><span>Truyện:</span> <span className="text-indigo-400">{project.usage.story.totalTokens}</span></div>
-                      <div className="flex justify-between"><span>Audio:</span> <span className="text-indigo-400">{project.usage.audio.totalTokens}</span></div>
-                      <div className="flex justify-between"><span>Hình Ảnh:</span> <span className="text-purple-400">{project.usage.image?.totalTokens || 0}</span></div>
-                      <hr className="border-slate-800 my-2"/>
-                      <div className="flex justify-between font-bold"><span>Tổng:</span> <span className="text-green-400">{project.usage.total}</span></div>
-                   </div>
-              </div>
           </div>
 
           {/* MIDDLE: Content Editor */}
@@ -401,7 +340,7 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
               </div>
               <textarea 
                   value={editedContent} 
-                  onChange={(e) => setEditedContent(e.target.value)} 
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditedContent(e.target.value)} 
                   className="flex-grow w-full bg-transparent p-6 text-slate-200 text-lg leading-relaxed focus:outline-none resize-none font-serif"
                   placeholder="Bạn có thể tự nhập truyện vào đây hoặc để AI viết..."
               />
@@ -414,26 +353,23 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
                   <div className="flex justify-between items-center mb-3">
                       <h4 className="text-sm font-bold text-white flex items-center"><ImageIcon className="w-4 h-4 mr-2 text-purple-400"/> Hình Ảnh</h4>
-                      
-                      <div className="flex items-center space-x-2">
-                          {project.imageUrl && (
-                              <button onClick={handleDownloadImage} className="text-xs text-slate-400 hover:text-green-400 p-1 rounded hover:bg-slate-800" title="Tải ảnh về"><Download className="w-4 h-4"/></button>
-                          )}
-                          <button onClick={() => fileInputRef.current?.click()} className="text-xs text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800" title="Upload ảnh"><Upload className="w-4 h-4"/></button>
-                      </div>
-                      <input type="file" ref={fileInputRef} onChange={(e) => {
+                      <input type="file" ref={fileInputRef} onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const file = e.target.files?.[0];
                           if(file) {
                               const r = new FileReader();
                               r.onload = () => onUpdateProject({
-                                  ...project, 
-                                  imageUrl: r.result as string,
-                                  imageSource: 'upload', // Mark as uploaded (free)
-                                  updatedAt: Date.now()
+                                  ...project, imageUrl: r.result as string, imageSource: 'upload', updatedAt: Date.now()
                               });
                               r.readAsDataURL(file);
                           }
                       }} className="hidden" />
+                      {project.imageUrl && (
+                         <div className="flex items-center space-x-1">
+                             <button onClick={handleDownloadImage} className="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-slate-700 border border-slate-700 flex items-center">
+                               <Download className="w-3 h-3 mr-1"/> PNG
+                             </button>
+                         </div>
+                      )}
                   </div>
                   <div 
                       className="aspect-video bg-slate-950 rounded-lg overflow-hidden mb-3 border border-slate-800 relative group cursor-pointer hover:border-slate-600 transition-colors"
@@ -461,25 +397,19 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
                   </div>
               </div>
 
-              {/* Veo Preview (if exists) */}
-              {project.animatedVideoData && (
-                  <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
-                      <h4 className="text-sm font-bold text-white mb-2 flex items-center"><Clapperboard className="w-4 h-4 mr-2 text-pink-500"/> Hoạt Hình (Veo)</h4>
-                      <video src={project.animatedVideoData} controls autoPlay loop className="w-full rounded border border-slate-800" />
-                  </div>
-              )}
-
               {/* Audio Control */}
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
                   <div className="flex justify-between items-center mb-3">
                       <h4 className="text-sm font-bold text-white flex items-center"><Music className="w-4 h-4 mr-2 text-indigo-400"/> Giọng Đọc</h4>
                       {audioBuffer && (
-                          <button onClick={handleDownloadAudio} className="text-xs text-slate-400 hover:text-green-400 p-1 rounded hover:bg-slate-800" title="Tải Audio WAV"><Download className="w-4 h-4"/></button>
+                          <button onClick={handleDownloadAudio} className="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-slate-700 border border-slate-700 flex items-center">
+                            <Download className="w-3 h-3 mr-1"/> WAV
+                          </button>
                       )}
                   </div>
                   <div className="mb-3">
                       <label className="text-xs text-slate-500 block mb-1">Chọn Giọng</label>
-                      <select value={config.voice} onChange={(e) => updateConfig('voice', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-white">
+                      <select value={config.voice} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => updateConfig('voice', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-white">
                           {VOICE_OPTIONS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                       </select>
                   </div>
@@ -493,33 +423,55 @@ const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ project, onUpdatePr
 
               {/* Export Control */}
               <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex-grow flex flex-col">
-                  <h4 className="text-sm font-bold text-white mb-3 flex items-center"><Video className="w-4 h-4 mr-2 text-green-400"/> Xuất Video (Final)</h4>
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center"><Video className="w-4 h-4 mr-2 text-green-400"/> Render Video</h4>
                   
-                  <div className="bg-slate-950 rounded border border-slate-800 flex-grow flex items-center justify-center mb-3 min-h-[150px]">
-                      {project.videoData ? (
-                          <video src={project.videoData} controls className="max-h-[200px] w-auto" />
-                      ) : <div className="text-xs text-slate-600 text-center px-4">Hãy tạo Audio và Ảnh trước</div>}
+                  {/* GLOBAL SUBTITLE TOGGLE */}
+                   <button onClick={() => setShowSubtitles(!showSubtitles)} className={`w-full mb-3 flex justify-center items-center text-[10px] px-2 py-1.5 rounded border transition-colors ${showSubtitles ? 'bg-indigo-900/30 text-indigo-300 border-indigo-800' : 'border-slate-800 text-slate-500 hover:bg-slate-800'}`}>
+                          <Captions className="w-3 h-3 mr-1"/> Chèn Phụ đề vào MP4: {showSubtitles ? 'BẬT' : 'TẮT'}
+                   </button>
+
+                  {/* 1. SERVER RENDER (NODE.JS) - RECOMMENDED */}
+                  <div className="mb-4">
+                    <Button 
+                      variant="primary" 
+                      onClick={handleExportVideoServer} 
+                      isLoading={loadingState.server} 
+                      disabled={!project.imageUrl || !project.audioData} 
+                      className="w-full h-10 text-sm bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 border-none shadow-lg shadow-emerald-900/20"
+                    >
+                      <Server className="w-4 h-4 mr-2" /> 
+                      {loadingState.server ? 'Đang gửi Server...' : 'Render bằng Server (Node.js)'}
+                    </Button>
+                    <p className="text-[10px] text-slate-500 mt-1 text-center">
+                      *Yêu cầu chạy terminal: "npm run dev"
+                    </p>
                   </div>
 
+                  <hr className="border-slate-700 mb-4 opacity-50" />
+
+                  {/* 2. LEGACY RENDER (SLOW) */}
                   <div className="space-y-3 mt-auto">
                       <div className="flex justify-between items-center">
+                          <h5 className="text-[10px] font-bold text-slate-500 uppercase">Legacy Render (Canvas)</h5>
                           <div className="flex space-x-1">
-                              <button onClick={() => setVideoQuality('720p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '720p' ? 'bg-indigo-600 border-indigo-500 text-white' : 'border-slate-700 text-slate-400'}`}>720p</button>
-                              <button onClick={() => setVideoQuality('1080p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '1080p' ? 'bg-indigo-600 border-indigo-500 text-white' : 'border-slate-700 text-slate-400'}`}>1080p</button>
+                              <button onClick={() => setVideoQuality('720p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '720p' ? 'bg-slate-700 border-slate-600 text-white' : 'border-slate-800 text-slate-500'}`}>720p</button>
+                              <button onClick={() => setVideoQuality('1080p')} className={`px-2 py-1 rounded text-[10px] border ${videoQuality === '1080p' ? 'bg-slate-700 border-slate-600 text-white' : 'border-slate-800 text-slate-500'}`}>1080p</button>
                           </div>
-                          <button onClick={() => setShowSubtitles(!showSubtitles)} className={`flex items-center text-[10px] px-2 py-1 rounded border ${showSubtitles ? 'bg-indigo-900/50 text-indigo-300 border-indigo-700' : 'border-slate-700 text-slate-500'}`}>
-                              <Captions className="w-3 h-3 mr-1"/> Phụ đề {showSubtitles ? 'BẬT' : 'TẮT'}
-                          </button>
                       </div>
 
                       {project.videoData ? (
                            <div className="grid grid-cols-2 gap-2">
-                               <a href={project.videoData} download="story.webm" className="block w-full"><Button className="w-full h-9 text-xs bg-green-600 hover:bg-green-700"><Download className="w-3 h-3 mr-1"/> Tải Xuống</Button></a>
-                               <Button variant="secondary" onClick={handleExportVideo} isLoading={loadingState.video} className="h-9 text-xs">Render Lại</Button>
+                               <a href={project.videoData} download="story.mp4" className="block w-full"><Button className="w-full h-9 text-xs bg-green-600 hover:bg-green-700"><Download className="w-3 h-3 mr-1"/> Tải Video</Button></a>
+                               <Button variant="secondary" onClick={handleExportVideoCanvas} isLoading={loadingState.video} className="h-9 text-xs">Render Lại</Button>
                            </div>
                       ) : (
-                          <Button variant="primary" onClick={handleExportVideo} isLoading={loadingState.video} disabled={!project.imageUrl || !project.audioData} className="w-full h-9 text-xs">Render Video</Button>
+                          <Button variant="secondary" onClick={handleExportVideoCanvas} isLoading={loadingState.video} disabled={!project.imageUrl || !project.audioData} className="w-full h-9 text-xs">
+                             {loadingState.video ? 'Đang Render (1x speed)...' : 'Render Chậm (Canvas)'}
+                          </Button>
                       )}
+                      <p className="text-[10px] text-slate-600 text-center">
+                        *Lưu ý: Render Canvas không hỗ trợ phụ đề trong file xuất.
+                      </p>
                   </div>
               </div>
 

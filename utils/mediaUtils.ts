@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 
 /**
  * Decodes Gemini's Raw PCM base64 string into an AudioBuffer.
@@ -116,28 +117,19 @@ interface SubtitleChunk {
 }
 
 /**
- * Estimates subtitle timings using a Weighted Character approach.
- * Accounts for natural pauses at punctuation.
+ * Estimates subtitle timings.
  */
 const createSubtitles = (fullText: string, duration: number): SubtitleChunk[] => {
-  // 1. Split text into segments based on punctuation marks for better pacing
-  // Keep the punctuation attached to the previous word.
-  // Split by: . ? ! ; (Sentence ends) or , (Clauses) or \n (Paragraphs)
   const regex = /[^.?!,;\n]+[.?!,;\n]*/g;
   const rawSegments = fullText.match(regex) || [fullText];
   const segments = rawSegments.map(s => s.trim()).filter(s => s.length > 0);
   
-  // 2. Define Weights (Cost in "Character Units")
-  // A standard character = 1 unit
   const CHAR_WEIGHT = 1;
-  const COMMA_WEIGHT = 6;    // Pause roughly equivalent to reading 6 characters (~300ms)
-  const END_WEIGHT = 15;     // Long pause for sentences (~800ms)
+  const COMMA_WEIGHT = 6;    
+  const END_WEIGHT = 15;     
 
-  // Calculate weight for a specific segment
   const getSegmentWeight = (text: string) => {
     let weight = text.length * CHAR_WEIGHT;
-    
-    // Check ending punctuation
     if (text.match(/[,;]$/)) {
       weight += COMMA_WEIGHT;
     } else if (text.match(/[.?!]$/) || text.includes('\n')) {
@@ -146,10 +138,7 @@ const createSubtitles = (fullText: string, duration: number): SubtitleChunk[] =>
     return weight;
   };
 
-  // 3. Calculate Total Weight of the entire story
   const totalWeight = segments.reduce((acc, seg) => acc + getSegmentWeight(seg), 0);
-  
-  // 4. Determine how many seconds per "Weight Unit"
   const secondsPerUnit = duration / totalWeight;
 
   let currentTime = 0;
@@ -157,34 +146,41 @@ const createSubtitles = (fullText: string, duration: number): SubtitleChunk[] =>
   return segments.map(text => {
     const weight = getSegmentWeight(text);
     const segmentTotalDuration = weight * secondsPerUnit;
-    
     const start = currentTime;
-    
-    // Determine the Visual End time.
-    // Ideally, the text should disappear slightly BEFORE the next one starts 
-    // if it's a sentence end, to mimic the silence.
     let visualEnd = start + segmentTotalDuration;
 
-    // Create a gap (blank screen) at the end of sentences
     if (text.match(/[.?!]$/) || text.includes('\n')) {
-        // Gap size: 40% of the calculated pause time for this punctuation
         const gapTime = (END_WEIGHT * secondsPerUnit) * 0.4; 
         visualEnd = visualEnd - gapTime;
     } else {
-        // For commas, just a tiny gap or continuous
-        visualEnd = visualEnd - 0.05; // tiny buffer
+        visualEnd = visualEnd - 0.05; 
     }
 
-    // Advance cursor by the full calculated duration (including the invisible pause)
     currentTime += segmentTotalDuration;
-    
     return { text, start, end: visualEnd };
   });
 };
 
 /**
- * Wraps text to fit within a specific width on the canvas
+ * Generates an SRT subtitle file content from text and audio duration.
  */
+export const generateSRTString = (fullText: string, duration: number): string => {
+  const chunks = createSubtitles(fullText, duration);
+  
+  const formatTime = (seconds: number) => {
+    const date = new Date(0);
+    date.setMilliseconds(seconds * 1000);
+    const iso = date.toISOString();
+    // ISO format: 1970-01-01T00:00:00.000Z
+    // SRT format: 00:00:00,000
+    return iso.substr(11, 8) + ',' + iso.substr(20, 3);
+  };
+
+  return chunks.map((chunk, index) => {
+    return `${index + 1}\n${formatTime(chunk.start)} --> ${formatTime(chunk.end)}\n${chunk.text}\n`;
+  }).join('\n');
+};
+
 const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number) => {
   const words = text.split(' ');
   let lines = [];
@@ -205,8 +201,7 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 };
 
 /**
- * Creates a video from a static image and an audio buffer using HTML5 Canvas and MediaRecorder.
- * Supports drawing dynamic subtitles.
+ * Creates a video from a static image and an audio buffer.
  */
 export const generateVideoBlob = async (
   imageUrl: string,
@@ -214,25 +209,22 @@ export const generateVideoBlob = async (
   options: VideoOptions
 ): Promise<Blob> => {
   return new Promise((resolve, reject) => {
-    // 1. Setup Canvas
     const canvas = document.createElement('canvas');
     const width = options.width;
     const height = options.height;
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency
+    const ctx = canvas.getContext('2d', { alpha: false });
     
     if (!ctx) {
       reject(new Error("Could not get canvas context"));
       return;
     }
 
-    // 2. Prepare Subtitles if text provided
     const subtitles = options.subtitles 
       ? createSubtitles(options.subtitles, audioBuffer.duration) 
       : [];
 
-    // 3. Load Image
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.src = imageUrl;
@@ -244,24 +236,19 @@ export const generateVideoBlob = async (
     img.onerror = (err) => reject(new Error("Failed to load image for video"));
 
     const startRecording = () => {
-      // 4. Setup Audio Processing for Recording
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const dest = audioCtx.createMediaStreamDestination();
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(dest);
       
-      // We do not connect to audioCtx.destination to avoid hearing it twice (or feedback) during render
-      // unless we want the user to hear the render process.
-
-      // 5. Create Combined MediaStream
-      const canvasStream = canvas.captureStream(options.fps || 30);
+      const fps = options.fps || 30;
+      const canvasStream = canvas.captureStream(fps);
       const combinedStream = new MediaStream([
         ...canvasStream.getVideoTracks(),
         ...dest.stream.getAudioTracks()
       ]);
 
-      // 6. Setup Recorder
       const chunks: Blob[] = [];
       let recorder: MediaRecorder;
       
@@ -289,24 +276,29 @@ export const generateVideoBlob = async (
         resolve(blob);
       };
 
-      // 7. Animation Loop Function
       const startTime = audioCtx.currentTime;
       let animationFrameId: number;
+
+      // Optimizations: Pre-calculate static layout values
+      const scale = Math.max(width / img.width, height / img.height);
+      const x = (width - img.width * scale) / 2;
+      const y = (height - img.height * scale) / 2;
+      
+      // Font setup
+      const fontSize = Math.floor(width * 0.055); 
+      const fontStr = `bold ${fontSize}px 'Inter', sans-serif`;
+      const lineHeight = fontSize * 1.3;
+      const maxTextWidth = width * 0.85;
 
       const drawFrame = () => {
         const currentTime = audioCtx.currentTime - startTime;
         
-        // --- A. Draw Background ---
-        // Scale logic (Center Crop)
-        const scale = Math.max(width / img.width, height / img.height);
-        const x = (width - img.width * scale) / 2;
-        const y = (height - img.height * scale) / 2;
-        
+        // --- Draw Background ---
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, img.width, img.height, x, y, img.width * scale, img.height * scale);
 
-        // Gradient overlay for text legibility
+        // Gradient overlay
         const gradient = ctx.createLinearGradient(0, height * 0.6, 0, height);
         gradient.addColorStop(0, "rgba(0,0,0,0)");
         gradient.addColorStop(0.5, "rgba(0,0,0,0.5)");
@@ -314,62 +306,53 @@ export const generateVideoBlob = async (
         ctx.fillStyle = gradient;
         ctx.fillRect(0, height * 0.6, width, height * 0.4);
 
-        // --- B. Draw Subtitles ---
+        // --- Draw Subtitles ---
         if (subtitles.length > 0) {
-          // Find if there is an active subtitle for this precise moment
           const activeSubtitle = subtitles.find(s => currentTime >= s.start && currentTime <= s.end);
           
           if (activeSubtitle) {
-            // Font settings - Responsive font size based on width
-            const fontSize = Math.floor(width * 0.055); 
-            ctx.font = `bold ${fontSize}px 'Inter', sans-serif`;
+            ctx.font = fontStr;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             
-            const maxTextWidth = width * 0.85;
             const lines = wrapText(ctx, activeSubtitle.text, maxTextWidth);
-            const lineHeight = fontSize * 1.3;
-            // Position text in the bottom 25% area
             const startY = height * 0.8 - ((lines.length - 1) * lineHeight) / 2;
 
             lines.forEach((line, index) => {
               const lineY = startY + index * lineHeight;
               
-              // Text Stroke (Outline) - Thicker for better readability
               ctx.strokeStyle = "rgba(0,0,0,0.9)";
               ctx.lineWidth = fontSize * 0.15;
               ctx.lineJoin = "round";
               ctx.strokeText(line, width / 2, lineY);
               
-              // Text Fill
               ctx.fillStyle = "#ffffff";
               ctx.shadowColor = "rgba(0,0,0,0.8)";
               ctx.shadowBlur = 8;
               ctx.fillText(line, width / 2, lineY);
               
-              // Reset shadow
               ctx.shadowBlur = 0; 
             });
           }
         }
 
-        // Loop if audio is still playing
-        if (currentTime < audioBuffer.duration + 0.5) { // Add small buffer to catch end
-          animationFrameId = requestAnimationFrame(drawFrame);
+        if (currentTime < audioBuffer.duration + 0.5) { 
+           // Throttle frame drawing if FPS is low to save CPU
+           // Default requestAnimationFrame is ~60fps.
+           // If we want 15fps, we can just let captureStream handle the sampling, 
+           // BUT drawing less often saves JS execution time.
+           animationFrameId = requestAnimationFrame(drawFrame);
         } else {
-             // Stop recorder slightly after audio ends
              recorder.stop();
         }
       };
 
-      // 8. Start Everything
       recorder.start();
       source.start(0);
-      drawFrame(); // Start animation loop
+      drawFrame(); 
 
       source.onended = () => {
         cancelAnimationFrame(animationFrameId);
-        // Ensure recorder stops if it hasn't already
         if (recorder.state === 'recording') {
             recorder.stop();
         }

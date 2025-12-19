@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import React, { useState, useEffect, useRef } from 'react';
 import { Project } from '../types';
 import { Play, Pause, Download, Video, ArrowLeft } from 'lucide-react';

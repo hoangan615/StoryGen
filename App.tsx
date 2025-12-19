@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 
 import React, { useState, useEffect } from 'react';
 import ProjectList from './components/ProjectList';
